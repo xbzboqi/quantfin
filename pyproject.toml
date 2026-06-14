@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantfin"
+version = "0.1.0"
+description = "个人量化理财助手 — A-share multi-factor scoring, valuation timing, WeChat notifications"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "akshare>=1.14.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "click>=8.1.0",
+    "pyyaml>=6.0",
+    "pyarrow>=14.0.0",
+    "scipy>=1.10.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+quantfin = "quantfin.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=4.0"]

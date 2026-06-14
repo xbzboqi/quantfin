@@ -1,0 +1,57 @@
+# quantfin 配置文件
+# 复制此文件为 config.yaml 并填入你的 token
+
+# ── 微信推送 (二选一即可) ──────────────────────────────────────────
+notification:
+  provider: pushplus          # "pushplus" | "wxpusher" | "both" | "none"
+  pushplus:
+    token: ${PUSHPLUS_TOKEN}   # 从环境变量读取，也可直接写字符串
+  wxpusher:
+    app_token: ${WXPUSHER_APP_TOKEN}
+    uid: ${WXPUSHER_UID}
+
+# ── 因子权重 (总和自动归一化) ─────────────────────────────────────
+factors:
+  weights:
+    momentum_3m: 0.15
+    momentum_12m_1m: 0.10
+    pe_percentile: 0.15
+    pb_percentile: 0.10
+    roe: 0.15
+    roe_stability: 0.05
+    gross_margin: 0.10
+    volatility_60d: 0.05
+    max_drawdown_60d: 0.05
+    avg_turnover_20d: 0.10
+  winsorize_quantiles: [0.01, 0.99]
+
+# ── 择时阈值 ──────────────────────────────────────────────────────
+timing:
+  pe_oversold_pct: 30        # PE 分位低于此值 → 超卖
+  pe_overbought_pct: 70      # PE 分位高于此值 → 高估
+  pe_extreme_pct: 90         # PE 分位高于此值 → 过买
+
+# ── 止盈参数 ──────────────────────────────────────────────────────
+stop_profit:
+  short_term_return_target: 0.08    # 短期 8%
+  medium_term_return_target: 0.15   # 中期 15%
+  long_term_return_target: 0.25     # 长期 25%
+  score_decline_warning: 0.30       # 评分下降 30% → 预警
+  score_decline_exit: 0.50          # 评分下降 50% → 退出
+
+# ── 数据缓存 ──────────────────────────────────────────────────────
+cache:
+  dir: ~/.quantfin/cache
+  ttl_minutes:
+    spot: 5
+    hist_daily: 240
+    financial: 1440
+    market_valuation: 60
+
+# ── 股票池过滤 ────────────────────────────────────────────────────
+universe:
+  min_daily_turnover_cny: 10000000    # 日均成交额 (1000万)
+  min_listing_days: 60
+  min_etf_aum: 100000000             # ETF 最小规模 (1亿)
+  exclude_st: true
+  max_pe: 200
