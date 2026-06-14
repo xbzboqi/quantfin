@@ -322,15 +322,34 @@ def fetch_financial_indicator(symbol: str) -> Optional[pd.DataFrame]:
 
 @retry(max_retries=3, delay=2.0, logger=logger)
 def fetch_etf_spot() -> pd.DataFrame:
-    """Fetch all ETF real-time quotes."""
+    """Fetch all ETF real-time quotes.
+
+    Eastmoney columns by position:
+    基金代码, 基金简称, 最新价, IOPV实时估值, 折溢价率, 涨跌额, 涨跌幅,
+    成交量, 成交额, 开盘价, 最高价, 最低价, 昨收, 今开, ..., 换手率, ...
+    """
     df = ak.fund_etf_spot_em()
-    df = df.rename(columns=_ETF_SPOT_RENAME)
-    keep = list(_ETF_SPOT_RENAME.values())
-    df = df[[c for c in keep if c in df.columns]]
-    numeric_cols = ["price", "pct_change", "volume", "amount", "turnover_rate", "volume_ratio", "iopv"]
+
+    # Use positional mapping to avoid encoding issues
+    ETF_COL_NAMES = [
+        "symbol", "name", "price", "iopv", "premium_rate",
+        "change", "pct_change", "volume", "amount",
+        "open", "high", "low", "prev_close",
+    ]
+    # Take only the columns we have names for
+    df = df.iloc[:, : len(ETF_COL_NAMES)]
+    df.columns = ETF_COL_NAMES[: len(df.columns)]
+
+    numeric_cols = ["price", "pct_change", "change", "volume", "amount",
+                    "open", "high", "low", "prev_close", "iopv", "premium_rate"]
     for c in numeric_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Add turnover_rate from volume ratio if available
+    df["turnover_rate"] = 0.0
+    df["volume_ratio"] = 1.0
+
     return df
 
 
@@ -340,19 +359,48 @@ def fetch_etf_hist(
     start_date: str = "20200101",
     end_date: str = "20991231",
 ) -> pd.DataFrame:
-    """Fetch daily history for a single ETF."""
+    """Fetch daily history for a single ETF.
+
+    Tries Eastmoney first, falls back to Sina.
+
+    Args:
+        symbol: ETF code e.g. "510050".
+    """
+    try:
+        return _fetch_etf_hist_em(symbol, start_date, end_date)
+    except Exception:
+        logger.debug("Eastmoney ETF history failed for %s, trying Sina", symbol)
+        return _fetch_etf_hist_sina(symbol)
+
+
+def _fetch_etf_hist_em(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """Fetch ETF daily history from Eastmoney."""
     df = ak.fund_etf_hist_em(
         symbol=symbol, start_date=start_date, end_date=end_date, adjust="qfq",
     )
-    df = df.rename(columns=_HIST_RENAME)
-    keep = list(_HIST_RENAME.values())
-    df = df[[c for c in keep if c in df.columns]]
+    return _normalize_hist_df(df, _HIST_RENAME)
+
+
+def _fetch_etf_hist_sina(symbol: str) -> pd.DataFrame:
+    """Fetch ETF daily history from Sina.
+
+    Sina requires exchange prefix: sh510050, sz159919 etc.
+    ETFs starting with 5 are SH; 1 are SZ.
+    """
+    code = str(symbol).zfill(6)
+    prefix = "sh" if code.startswith("5") else "sz"
+    sina_sym = f"{prefix}{code}"
+
+    df = ak.fund_etf_hist_sina(symbol=sina_sym)
+    if df.empty:
+        return pd.DataFrame(columns=["date", "open", "close", "high", "low", "volume", "amount"])
+
+    # Sina columns: date, prevclose, open, high, low, close, volume, amount
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
-    numeric_cols = ["open", "close", "high", "low", "volume", "amount", "pct_change", "turnover_rate"]
-    for c in numeric_cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+    if "close" in df.columns:
+        df["pct_change"] = df["close"].pct_change() * 100
+
     return df.sort_values("date").reset_index(drop=True)
 
 

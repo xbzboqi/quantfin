@@ -379,7 +379,7 @@ def _compute_stock_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
 
 
 def _compute_etf_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
-    """Compute factor raw values for the ETF universe (simplified)."""
+    """Compute factor raw values for the ETF universe (simplified, top 20 by activity)."""
     import pandas as pd
     from quantfin.data.fetcher import fetch_etf_hist
 
@@ -391,18 +391,35 @@ def _compute_etf_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
         "avg_turnover_20d": [],
     }
 
+    # Sort by amount (most active first), take top 20 for history fetch
+    if "amount" in universe.columns:
+        top_etfs = universe.sort_values("amount", ascending=False, na_position="last").head(20)
+    else:
+        top_etfs = universe.head(20)
+
+    top_symbols = set(top_etfs["symbol"].tolist())
+
     for _, row in universe.iterrows():
         sym = row.get("symbol", "")
-        try:
-            df = cache.fetch_or_cache(
-                f"hist_daily/etf_{sym}",
-                lambda s=sym: fetch_etf_hist(s, start_date="20210101"),
-            )
-            factors["momentum_3m"].append(momentum.momentum_3m(df) if not df.empty else 0.0)
-            factors["momentum_12m_1m"].append(momentum.momentum_12m_1m(df) if not df.empty else 0.0)
-            factors["volatility_60d"].append(volatility.volatility_60d(df) or 0.0 if not df.empty else 0.0)
-            factors["max_drawdown_60d"].append(volatility.max_drawdown_60d(df) or 0.0 if not df.empty else 0.0)
-        except Exception:
+        if sym in top_symbols:
+            try:
+                df = cache.fetch_or_cache(
+                    f"hist_daily/etf_{sym}",
+                    lambda s=sym: fetch_etf_hist(s, start_date="20210101"),
+                )
+                if df is not None and not df.empty:
+                    factors["momentum_3m"].append(momentum.momentum_3m(df))
+                    factors["momentum_12m_1m"].append(momentum.momentum_12m_1m(df))
+                    factors["volatility_60d"].append(volatility.volatility_60d(df) or 0.0)
+                    factors["max_drawdown_60d"].append(volatility.max_drawdown_60d(df) or 0.0)
+                else:
+                    raise ValueError("Empty DataFrame")
+            except Exception:
+                factors["momentum_3m"].append(0.0)
+                factors["momentum_12m_1m"].append(0.0)
+                factors["volatility_60d"].append(0.0)
+                factors["max_drawdown_60d"].append(0.0)
+        else:
             factors["momentum_3m"].append(0.0)
             factors["momentum_12m_1m"].append(0.0)
             factors["volatility_60d"].append(0.0)
