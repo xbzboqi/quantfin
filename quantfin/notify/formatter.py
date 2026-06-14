@@ -157,20 +157,20 @@ def _build_sep(n: int) -> str:
 
 def _signal_emoji(signal: MarketSignal) -> str:
     mapping = {
-        MarketSignal.OVERSOLD: "🟢",
-        MarketSignal.UNDERVALUED: "🟢",
-        MarketSignal.NEUTRAL: "🟡",
-        MarketSignal.OVERVALUED: "🟠",
-        MarketSignal.OVERBOUGHT: "🔴",
+        MarketSignal.OVERSOLD: "[超卖]",
+        MarketSignal.UNDERVALUED: "[低估]",
+        MarketSignal.NEUTRAL: "[中性]",
+        MarketSignal.OVERVALUED: "[高估]",
+        MarketSignal.OVERBOUGHT: "[过买]",
     }
-    return mapping.get(signal, "⚪")
+    return mapping.get(signal, "[--]")
 
 
 def _buy_emoji(signal: str) -> str:
     mapping = {
-        "STRONG_BUY": "🔥 强买",
-        "BUY": "✅ 买入",
-        "WATCH": "👀 关注",
+        "STRONG_BUY": "!!强买",
+        "BUY": "买入",
+        "WATCH": "关注",
         "NO_SIGNAL": "—",
     }
     return mapping.get(signal, signal)

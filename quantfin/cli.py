@@ -135,7 +135,13 @@ def notify(ctx, dry_run):
         return
 
     if dry_run:
-        print(result)
+        # Handle Windows GBK encoding
+        try:
+            print(result)
+        except UnicodeEncodeError:
+            import sys
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            print(result)
         return
 
     cfg = ctx.obj.get("config", {})

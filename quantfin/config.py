@@ -35,8 +35,15 @@ def load_config(path: Optional[str] = None) -> dict[str, Any]:
               3. ~/.quantfin/config.yaml
     """
     if path is None:
-        path = os.environ.get("QUANTFIN_CONFIG",
-                               str(Path("config.yaml").resolve()))
+        path = os.environ.get("QUANTFIN_CONFIG", "")
+        if not path:
+            # Search: ./config.yaml, ../config.yaml (project root)
+            for search in ("config.yaml", str(Path(__file__).resolve().parent.parent / "config.yaml")):
+                if Path(search).exists():
+                    path = search
+                    break
+            if not path:
+                path = str(Path("config.yaml").resolve())
 
     config_path = Path(path)
     if not config_path.exists():
