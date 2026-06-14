@@ -53,10 +53,10 @@ class UniverseBuilder:
         # 1. Remove ST / *ST / delisting
         df = self._exclude_st(df)
 
-        # 2. Remove extreme PE
+        # 2. Remove extreme PE (only if column present)
         df = self._filter_pe(df)
 
-        # 3. Remove illiquid stocks
+        # 3. Remove illiquid stocks (skip if no amount/volume data)
         df = self._filter_liquidity(df)
 
         # 4. Keep essential columns
@@ -132,30 +132,40 @@ class UniverseBuilder:
         mask = pd.Series(True, index=df.index)
         for pat in ST_PATTERNS:
             if "name" in df.columns:
-                mask &= ~df["name"].str.contains(pat, na=False)
+                mask &= ~df["name"].str.contains(pat, na=False, regex=False)
         return df[mask]
 
     def _filter_pe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Remove stocks with non-positive or extreme PE."""
+        """Remove stocks with non-positive or extreme PE.
+
+        Stocks with NaN PE are kept (data source may not provide PE).
+        """
         if "pe_dynamic" not in df.columns:
             return df
         max_pe = self.config.get("max_pe", 200)
-        mask = (df["pe_dynamic"] > 0) & (df["pe_dynamic"] <= max_pe)
+        pe = df["pe_dynamic"]
+        # Include: NaN PE (unknown), 0 < PE <= max_pe (valid)
+        mask = pe.isna() | ((pe > 0) & (pe <= max_pe))
         return df[mask]
 
     def _filter_liquidity(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Remove stocks with average daily turnover below threshold."""
+        """Remove stocks with average daily turnover below threshold.
+
+        Stocks with NaN amount are kept (data source may not provide it).
+        """
         if "amount" not in df.columns:
             return df
         min_amount = self.config.get("min_daily_turnover_cny", 10_000_000)
-        return df[df["amount"] >= min_amount].copy()
+        amount = df["amount"]
+        mask = amount.isna() | (amount >= min_amount)
+        return df[mask]
 
     def _exclude_etf_keywords(self, df: pd.DataFrame) -> pd.DataFrame:
         """Remove leveraged/inverse ETFs by name keyword."""
         mask = pd.Series(True, index=df.index)
         for kw in ETF_EXCLUDE_KEYWORDS:
             if "name" in df.columns:
-                mask &= ~df["name"].str.contains(kw, na=False)
+                mask &= ~df["name"].str.contains(kw, na=False, regex=False)
         return df[mask]
 
 

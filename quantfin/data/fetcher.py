@@ -86,14 +86,24 @@ _GOLD_RENAME = {
 def fetch_a_share_spot() -> pd.DataFrame:
     """Fetch all A-share real-time quotes with PE/PB/mcap.
 
+    Tries Eastmoney first (more data), falls back to Sina.
+
     Returns DataFrame with English column names.
     """
+    # Try Eastmoney first (has PE/PB/mcap)
+    try:
+        return _fetch_a_share_spot_em()
+    except Exception:
+        logger.warning("Eastmoney spot failed, falling back to Sina")
+        return _fetch_a_share_spot_sina()
+
+
+def _fetch_a_share_spot_em() -> pd.DataFrame:
+    """Fetch A-share spot from Eastmoney (rich data)."""
     df = ak.stock_zh_a_spot_em()
     df = df.rename(columns=_A_SPOT_RENAME)
-    # Keep only columns we renamed (drop leftovers)
     keep = list(_A_SPOT_RENAME.values())
     df = df[[c for c in keep if c in df.columns]]
-    # Convert numeric columns
     numeric_cols = [
         "price", "pct_change", "change", "volume", "amount",
         "amplitude", "high", "low", "open", "prev_close",
@@ -106,7 +116,41 @@ def fetch_a_share_spot() -> pd.DataFrame:
     return df
 
 
-@retry(max_retries=3, delay=2.0, logger=logger)
+def _fetch_a_share_spot_sina() -> pd.DataFrame:
+    """Fetch A-share spot from Sina (basic data — no PE/PB/mcap).
+
+    Sina columns by position: 代码, 名称, 最新价, 涨跌额, 涨跌幅,
+    买入, 卖出, 昨收, 今开, 最高, 最低, 成交量, 成交额, 时间.
+    """
+    df = ak.stock_zh_a_spot()
+
+    # Rename by position (avoid encoding issues with Chinese chars)
+    COL_NAMES = ["symbol", "name", "price", "change", "pct_change",
+                 "bid", "ask", "prev_close", "open", "high", "low",
+                 "volume", "amount", "time"]
+    df.columns = COL_NAMES[: len(df.columns)]
+
+    numeric_cols = ["price", "pct_change", "change", "volume", "amount",
+                    "high", "low", "open", "prev_close"]
+    for c in numeric_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Sina doesn't provide PE/PB/mcap — add as NaN
+    for col in ["pe_dynamic", "pb", "total_mcap", "float_mcap",
+                "turnover_rate", "volume_ratio", "momentum_60d"]:
+        if col not in df.columns:
+            df[col] = float("nan")
+
+    # Estimate turnover rate from volume
+    if "volume" in df.columns:
+        mean_vol = df["volume"].mean()
+        if mean_vol > 0:
+            df["turnover_rate"] = df["volume"] / mean_vol * 2.0
+
+    return df
+
+
 def fetch_a_share_hist(
     symbol: str,
     period: str = "daily",
@@ -116,23 +160,84 @@ def fetch_a_share_hist(
 ) -> pd.DataFrame:
     """Fetch daily OHLCV history for a single A-share.
 
+    Tries Eastmoney first (forward-adjusted data), falls back to Sina.
+
     Args:
-        symbol: Stock code e.g. "000001" (no exchange prefix).
+        symbol: Stock code e.g. "000001" (no exchange prefix needed for em;
+                sina requires "sz000001" or "sh600001" format).
         period: "daily", "weekly", or "monthly".
         start_date: YYYYMMDD start.
         end_date: YYYYMMDD end.
         adjust: "qfq" (forward-adjusted), "hfq" (backward), "" (raw).
 
-    Returns DataFrame with English column names.
+    Returns DataFrame with English column names: date, open, close, high, low, volume, amount.
     """
+    # Try Eastmoney first
+    try:
+        return _fetch_a_share_hist_em(symbol, period, start_date, end_date, adjust)
+    except Exception:
+        logger.debug("Eastmoney history failed for %s, trying Sina", symbol)
+        return _fetch_a_share_hist_sina(symbol, start_date, end_date)
+
+
+def _fetch_a_share_hist_em(
+    symbol: str, period: str, start_date: str, end_date: str, adjust: str,
+) -> pd.DataFrame:
+    """Fetch daily history from Eastmoney."""
     df = ak.stock_zh_a_hist(
         symbol=symbol, period=period,
         start_date=start_date, end_date=end_date, adjust=adjust,
     )
-    df = df.rename(columns=_HIST_RENAME)
-    keep = list(_HIST_RENAME.values())
+    return _normalize_hist_df(df, _HIST_RENAME)
+
+
+def _fetch_a_share_hist_sina(
+    symbol: str, start_date: str, end_date: str,
+) -> pd.DataFrame:
+    """Fetch daily history from Sina.
+
+    Sina requires symbol format with exchange prefix: sz000001 or sh600001.
+    """
+    # Convert plain code to Sina format
+    sina_sym = _to_sina_symbol(symbol)
+
+    # Convert date format from YYYYMMDD to YYYY-MM-DD
+    start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
+    end = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
+
+    df = ak.stock_zh_a_daily(
+        symbol=sina_sym, start_date=start, end_date=end, adjust="qfq",
+    )
+    # Sina already has English column names: date, open, high, low, close, volume, amount
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+
+    # Add pct_change
+    if "close" in df.columns:
+        df["pct_change"] = df["close"].pct_change() * 100
+
+    return df.sort_values("date").reset_index(drop=True)
+
+
+def _to_sina_symbol(symbol: str) -> str:
+    """Convert a plain stock code to Sina format with exchange prefix."""
+    code = str(symbol).zfill(6)
+    if code.startswith(("6", "9")):
+        return f"sh{code}"
+    if code.startswith(("0", "3")):
+        return f"sz{code}"
+    if code.startswith(("4", "8")):
+        return f"bj{code}"  # Beijing exchange
+    return f"sz{code}"  # default
+
+
+def _normalize_hist_df(df: pd.DataFrame, rename_map: dict) -> pd.DataFrame:
+    """Apply column rename and type coercion to a history DataFrame."""
+    df = df.rename(columns=rename_map)
+    keep = list(rename_map.values())
     df = df[[c for c in keep if c in df.columns]]
-    df["date"] = pd.to_datetime(df["date"])
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
     numeric_cols = [
         "open", "close", "high", "low", "volume", "amount",
         "amplitude", "pct_change", "change", "turnover_rate",
@@ -257,43 +362,64 @@ def fetch_etf_hist(
 
 @retry(max_retries=3, delay=2.0, logger=logger)
 def fetch_gold_spot() -> float:
-    """Fetch current gold futures spot price (AU2502 / most-active contract).
+    """Fetch current gold spot price from SGE (上海黄金交易所).
 
-    Returns CNY per gram (approximate).
+    Returns CNY per gram.
     """
     try:
-        df = ak.futures_zh_spot_sina(symbol="AU0")
+        df = ak.spot_golden_benchmark_sge()
+        if df.empty:
+            raise ValueError("No gold data returned")
+
+        # Columns: 日期时间, 今收盘, 昨收盘
+        close_col = [c for c in df.columns if "收盘" in c and "今" in c]
+        if close_col:
+            return float(df[close_col[0]].iloc[-1])
+
+        # Fallback: last numeric column
+        last_val = df.iloc[-1, -1]
+        return float(last_val)
     except Exception:
-        # Fallback to gold spot from sina
-        df = ak.spot_golden_benchmark_sina()
-        if "最新价" in df.columns:
-            return float(df["最新价"].iloc[-1])
-        raise
-
-    # AU0 returns the most-active gold futures contract
-    if "price" in df.columns or "最新价" in df.columns:
-        col = "price" if "price" in df.columns else "最新价"
-        return float(df[col].iloc[0])
-    # Try to find the AU-prefixed row
-    gold_row = df[df["symbol"].str.startswith("AU")].iloc[0] if "symbol" in df.columns else df.iloc[0]
-    if "price" in gold_row:
-        return float(gold_row["price"])
-    return float(gold_row.iloc[1])  # best effort
+        logger.warning("SGE gold spot failed, trying futures spot")
+        try:
+            df = ak.futures_zh_spot(symbol="AU2502")
+            if "最新价" in df.columns:
+                return float(df["最新价"].iloc[0])
+            # Try generic approach
+            for col in df.columns:
+                val = pd.to_numeric(df[col], errors="coerce").iloc[0]
+                if not pd.isna(val) and 300 < val < 1500:
+                    return float(val)
+        except Exception:
+            pass
+        raise RuntimeError("Failed to fetch gold price from any source")
 
 
-@retry(max_retries=3, delay=2.0, logger=logger)
 def fetch_gold_hist(start_date: str = "20200101", end_date: str = "20991231") -> pd.DataFrame:
-    """Fetch daily gold futures history."""
-    df = ak.futures_zh_daily_sina(symbol="AU2502")
-    df = df.rename(columns=_GOLD_RENAME)
-    keep = list(_GOLD_RENAME.values())
-    df = df[[c for c in keep if c in df.columns]]
+    """Fetch daily gold spot history from SGE.
+
+    Returns DataFrame with columns: date, close, prev_close.
+    The full historical series is returned by AKShare.
+    """
+    df = ak.spot_golden_benchmark_sge()
+    if df.empty:
+        return df
+
+    rename = {
+        "交易时间": "date",
+        "晚盘价": "close",     # evening session = close price
+        "早盘价": "prev_close",  # morning session = previous close
+    }
+    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"])
-    numeric_cols = ["open", "close", "high", "low", "volume", "prev_close"]
+
+    numeric_cols = ["close", "prev_close"]
     for c in numeric_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
     return df.sort_values("date").reset_index(drop=True)
 
 

@@ -311,6 +311,7 @@ def _run_full_scan(
 def _compute_stock_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
     """Compute factor raw values for the stock universe."""
     from quantfin.data.fetcher import fetch_a_share_hist, fetch_hist_batch
+    from quantfin.factors import liquidity, momentum, quality, value, volatility
 
     factors: dict[str, list] = {
         "momentum_3m": [], "momentum_12m_1m": [],
@@ -320,7 +321,7 @@ def _compute_stock_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
         "avg_turnover_20d": [],
     }
 
-    # PE/PB percentile cross-sectionally (fast path)
+    # Pre-fill all factor arrays with defaults
     for _, row in universe.iterrows():
         factors["pe_percentile"].append(
             value.pe_percentile_from_spot(row, universe))
@@ -331,9 +332,16 @@ def _compute_stock_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
         factors["roe"].append(0.0)
         factors["roe_stability"].append(50.0)
         factors["gross_margin"].append(0.0)
+        factors["momentum_3m"].append(0.0)
+        factors["momentum_12m_1m"].append(0.0)
+        factors["volatility_60d"].append(0.0)
+        factors["max_drawdown_60d"].append(0.0)
 
-    # Fetch history for top stocks by market cap (limit for speed)
-    top_symbols = universe.sort_values("total_mcap", ascending=False).head(100)["symbol"].tolist() if "total_mcap" in universe.columns else universe["symbol"].head(50).tolist()
+    # Fetch history for top stocks (by market cap if available, else first 20)
+    if "total_mcap" in universe.columns and universe["total_mcap"].notna().any():
+        top_symbols = universe.sort_values("total_mcap", ascending=False, na_position="last").head(20)["symbol"].tolist()
+    else:
+        top_symbols = universe["symbol"].head(20).tolist()
 
     hist_map = fetch_hist_batch(top_symbols, "stock", start_date="20210101")
 
@@ -352,8 +360,8 @@ def _compute_stock_factors(universe: pd.DataFrame, cache: DataCache) -> dict:
             factors["volatility_60d"][idx] = 0.0
             factors["max_drawdown_60d"][idx] = 0.0
 
-        # Financials (only for top 50)
-        if idx < 50:
+        # Financials (only for top 20)
+        if idx < 20:
             try:
                 fin_df = cache.fetch_or_cache(
                     f"financial/{sym}",
